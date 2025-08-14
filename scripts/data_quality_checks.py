@@ -41,6 +41,18 @@ class DataQualityMonitor:
         )
         
         self.quality_results = []
+    
+    def convert_numpy_types(self, obj):
+        """Convert numpy types to Python native types for JSON serialization"""
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, dict):
+            return {k: self.convert_numpy_types(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self.convert_numpy_types(v) for v in obj]
+        return obj
         
     def run_completeness_checks(self) -> List[Dict[str, Any]]:
         """Check data completeness across critical fields"""
@@ -242,6 +254,10 @@ class DataQualityMonitor:
         for check in validity_checks:
             try:
                 result_df = pd.read_sql(check['query'], self.engine)
+                if result_df.empty or len(result_df) == 0:
+                    logger.warning(f"No results for validity check {check['check']}")
+                    continue
+                    
                 invalid_count = result_df['invalid_count'].iloc[0]
                 total_count = result_df['total_count'].iloc[0]
                 
@@ -265,7 +281,8 @@ class DataQualityMonitor:
                 results.append(result)
                 
             except Exception as e:
-                logger.error(f"Error running validity check {check['check']}: {str(e)}")
+                logger.error(f"Error running validity check {check.get('check', 'unknown')}: {str(e)}")
+                logger.debug(f"Check details: {check}")
                 results.append({
                     'check_type': 'validity',
                     'table_name': check['table'],
@@ -381,7 +398,7 @@ class DataQualityMonitor:
                     SELECT 
                         COUNT(*) as total_records,
                         MAX({check['timestamp_field']}) as latest_timestamp,
-                        EXTRACT(EPOCH FROM (NOW() - MAX({check['timestamp_field']}))) / 3600 as hours_since_last_update
+                        EXTRACT(EPOCH FROM (NOW() - MAX({check['timestamp_field']}))::interval) / 3600 as hours_since_last_update
                     FROM {check['table']}
                     WHERE {check['timestamp_field']} IS NOT NULL
                 """
@@ -480,8 +497,8 @@ class DataQualityMonitor:
                     SELECT COUNT(*) as invalid_count,
                            (SELECT COUNT(*) FROM raw_data.policies) as total_count
                     FROM raw_data.policies
-                    WHERE EXTRACT(DAY FROM (expiration_date - effective_date)) < 30
-                    OR EXTRACT(DAY FROM (expiration_date - effective_date)) > 1095
+                    WHERE (expiration_date::date - effective_date::date) < 30
+                    OR (expiration_date::date - effective_date::date) > 1095
                 """,
                 'description': 'Policy terms should be between 30 days and 3 years'
             }
@@ -529,27 +546,30 @@ class DataQualityMonitor:
         
         try:
             with self.engine.connect() as conn:
-                for result in results:
-                    insert_query = """
-                        INSERT INTO monitoring.data_quality_results 
-                        (table_name, check_type, check_description, check_result, 
-                         error_count, total_records, check_timestamp, batch_id, details)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """
-                    
-                    conn.execute(insert_query, (
-                        result['table_name'],
-                        result['check_type'],
-                        result['check_description'],
-                        result['check_result'],
-                        result['error_count'],
-                        result['total_records'],
-                        datetime.now(),
-                        batch_id,
-                        json.dumps(result['details'])
-                    ))
+                with conn.begin():  # Use transaction context
+                    for result in results:
+                        insert_query = """
+                            INSERT INTO monitoring.data_quality_results 
+                            (table_name, check_type, check_description, check_result, 
+                             error_count, total_records, check_timestamp, batch_id, details)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """
+                        
+                        # Convert all numpy types before saving
+                        clean_result = self.convert_numpy_types(result)
+                        
+                        conn.execute(insert_query, (
+                            clean_result['table_name'],
+                            clean_result['check_type'],
+                            clean_result['check_description'],
+                            clean_result['check_result'],
+                            clean_result['error_count'],
+                            clean_result['total_records'],
+                            datetime.now(),
+                            batch_id,
+                            json.dumps(clean_result.get('details', {}))
+                        ))
                 
-                conn.commit()
                 logger.info("Quality check results saved successfully")
                 
         except Exception as e:
@@ -640,7 +660,9 @@ def main():
         # Save summary to file
         summary_file = f"data_quality_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         with open(f"/tmp/{summary_file}", 'w') as f:
-            json.dump(summary, f, indent=2)
+            # Convert numpy types before JSON serialization
+            clean_summary = monitor.convert_numpy_types(summary)
+            json.dump(clean_summary, f, indent=2)
         
         logger.info(f"Summary saved to /tmp/{summary_file}")
         
