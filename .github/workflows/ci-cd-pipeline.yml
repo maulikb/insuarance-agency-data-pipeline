@@ -1,0 +1,609 @@
+name: Insurance Data Platform CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+env:
+  AWS_REGION: us-west-2
+  PYTHON_VERSION: '3.10'
+  TERRAFORM_VERSION: '1.6.0'
+  KUBECTL_VERSION: 'v1.28.0'
+
+jobs:
+  # ===========================================
+  # CODE QUALITY AND TESTING
+  # ===========================================
+  
+  code-quality:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Cache Python Dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+            
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+          
+      - name: Code Formatting Check (Black)
+        run: black --check --diff .
+        
+      - name: Import Sorting Check (isort)
+        run: isort --check-only --diff .
+        
+      - name: Linting (flake8)
+        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        
+      - name: Type Checking (mypy)
+        run: mypy . --ignore-missing-imports --no-strict-optional
+        
+      - name: Security Scan (bandit)
+        run: bandit -r . -f json -o bandit-report.json || true
+        
+      - name: Upload Security Scan Results
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-scan-results
+          path: bandit-report.json
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: code-quality
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_USER: test_user
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+          
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+          
+      - name: Run Unit Tests
+        run: |
+          pytest tests/unit/ -v --cov=. --cov-report=xml --cov-report=html
+        env:
+          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+          REDIS_URL: redis://localhost:6379/0
+          
+      - name: Upload Coverage Reports
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: true
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_USER: test_user
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+          
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+          
+      kafka:
+        image: confluentinc/cp-kafka:7.4.0
+        env:
+          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+        ports:
+          - 9092:9092
+          
+      zookeeper:
+        image: confluentinc/cp-zookeeper:7.4.0
+        env:
+          ZOOKEEPER_CLIENT_PORT: 2181
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+          
+      - name: Wait for Services
+        run: |
+          sleep 30
+          
+      - name: Run Integration Tests
+        run: |
+          pytest tests/integration/ -v --timeout=300
+        env:
+          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+          REDIS_URL: redis://localhost:6379/0
+          KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+
+  dbt-tests:
+    name: dbt Tests
+    runs-on: ubuntu-latest
+    needs: code-quality
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_USER: test_user
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
+      - name: Install dbt
+        run: |
+          python -m pip install --upgrade pip
+          pip install dbt-core dbt-postgres
+          
+      - name: Setup Test Database Schema
+        run: |
+          PGPASSWORD=test_password psql -h localhost -U test_user -d test_db -f docker/postgres/init/01-create-databases.sql
+          PGPASSWORD=test_password psql -h localhost -U test_user -d test_db -f docker/postgres/init/02-insurance-schema.sql
+          
+      - name: dbt Dependencies
+        run: |
+          cd dbt && dbt deps --profiles-dir profiles
+          
+      - name: dbt Compile
+        run: |
+          cd dbt && dbt compile --profiles-dir profiles
+        env:
+          DBT_PROFILES_DIR: profiles
+          
+      - name: dbt Test
+        run: |
+          cd dbt && dbt test --profiles-dir profiles
+        env:
+          DBT_PROFILES_DIR: profiles
+
+  # ===========================================
+  # INFRASTRUCTURE VALIDATION
+  # ===========================================
+  
+  terraform-validate:
+    name: Terraform Validation
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          
+      - name: Terraform Format Check
+        run: |
+          cd infrastructure/terraform
+          terraform fmt -check -recursive
+          
+      - name: Terraform Initialize
+        run: |
+          cd infrastructure/terraform
+          terraform init -backend=false
+          
+      - name: Terraform Validate
+        run: |
+          cd infrastructure/terraform
+          terraform validate
+          
+      - name: Security Scan (tfsec)
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: infrastructure/terraform
+          additional_args: --format json --out tfsec-results.json
+          
+      - name: Upload Terraform Security Scan
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-security-scan
+          path: tfsec-results.json
+
+  # ===========================================
+  # BUILD AND PACKAGE
+  # ===========================================
+  
+  build-docker-images:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests]
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.CONTAINER_REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+          
+      - name: Extract Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.CONTAINER_REGISTRY }}/insurance-platform
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+            
+      - name: Build and Push Airflow Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./docker/airflow
+          file: ./docker/airflow/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          
+      - name: Build and Push API Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./api
+          file: ./api/Dockerfile
+          push: true
+          tags: ${{ secrets.CONTAINER_REGISTRY }}/insurance-platform/api:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ===========================================
+  # DEPLOYMENT
+  # ===========================================
+  
+  deploy-dev:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    needs: [terraform-validate, build-docker-images, dbt-tests]
+    if: github.ref == 'refs/heads/develop' || github.event.inputs.environment == 'dev'
+    environment: development
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+          
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          
+      - name: Terraform Plan
+        run: |
+          cd infrastructure/terraform
+          terraform init
+          terraform workspace select dev || terraform workspace new dev
+          terraform plan -var="environment=dev" -out=tfplan
+          
+      - name: Terraform Apply
+        run: |
+          cd infrastructure/terraform
+          terraform apply -auto-approve tfplan
+          
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+          
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name insurance-data-platform-dev
+          
+      - name: Deploy Helm Charts
+        run: |
+          helm upgrade --install insurance-platform ./charts/insurance-platform \
+            --namespace insurance-dev \
+            --create-namespace \
+            --set image.tag=${{ github.sha }} \
+            --set environment=dev \
+            --wait
+            
+      - name: Run Data Quality Checks
+        run: |
+          kubectl exec -n insurance-dev deployment/airflow-scheduler -- python /opt/airflow/scripts/data_quality_checks.py
+          
+      - name: Slack Notification
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          channel: '#data-engineering'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+        if: always()
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: deploy-dev
+    if: github.ref == 'refs/heads/main' || github.event.inputs.environment == 'staging'
+    environment: staging
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+          
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          
+      - name: Terraform Plan
+        run: |
+          cd infrastructure/terraform
+          terraform init
+          terraform workspace select staging || terraform workspace new staging
+          terraform plan -var="environment=staging" -out=tfplan
+          
+      - name: Terraform Apply
+        run: |
+          cd infrastructure/terraform
+          terraform apply -auto-approve tfplan
+          
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+          
+      - name: Deploy to Staging
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name insurance-data-platform-staging
+          helm upgrade --install insurance-platform ./charts/insurance-platform \
+            --namespace insurance-staging \
+            --create-namespace \
+            --set image.tag=${{ github.sha }} \
+            --set environment=staging \
+            --wait
+            
+      - name: Run End-to-End Tests
+        run: |
+          pytest tests/e2e/ -v --env=staging
+          
+      - name: Performance Tests
+        run: |
+          kubectl run load-test --image=loadimpact/k6 --rm -i --restart=Never -- run /tests/load-test.js
+
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main' && github.event.inputs.environment == 'prod'
+    environment: production
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Manual Approval
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ secrets.GITHUB_TOKEN }}
+          approvers: data-eng-leads
+          minimum-approvals: 2
+          
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+          
+      - name: Blue-Green Deployment
+        run: |
+          # Implement blue-green deployment strategy
+          ./scripts/blue-green-deploy.sh ${{ github.sha }}
+          
+      - name: Smoke Tests
+        run: |
+          pytest tests/smoke/ -v --env=production
+          
+      - name: Rollback on Failure
+        if: failure()
+        run: |
+          ./scripts/rollback.sh
+          
+      - name: Success Notification
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          channel: '#general'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: '🚀 Production deployment successful!'
+        if: success()
+
+  # ===========================================
+  # MONITORING AND CLEANUP
+  # ===========================================
+  
+  post-deployment-monitoring:
+    name: Post-Deployment Monitoring
+    runs-on: ubuntu-latest
+    needs: [deploy-dev]
+    if: always()
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+          
+      - name: Check Application Health
+        run: |
+          # Wait for deployment to stabilize
+          sleep 60
+          
+          # Health check endpoints
+          curl -f http://your-load-balancer/health || exit 1
+          curl -f http://your-airflow-endpoint/health || exit 1
+          
+      - name: Monitor Data Pipeline
+        run: |
+          python scripts/monitor_pipeline_health.py --environment=dev
+          
+      - name: Update Status Dashboard
+        run: |
+          curl -X POST "${{ secrets.STATUS_DASHBOARD_WEBHOOK }}" \
+            -H "Content-Type: application/json" \
+            -d '{"status": "deployed", "version": "${{ github.sha }}", "environment": "dev"}'
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: build-docker-images
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Container Security Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ secrets.CONTAINER_REGISTRY }}/insurance-platform:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          
+      - name: Upload Security Scan Results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+          
+      - name: Dependency Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'insurance-data-platform'
+          path: '.'
+          format: 'ALL'
+          
+      - name: Upload Dependency Check Results
+        uses: actions/upload-artifact@v3
+        with:
+          name: dependency-check-report
+          path: reports/

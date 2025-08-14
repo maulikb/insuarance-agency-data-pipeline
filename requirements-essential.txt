@@ -1,0 +1,70 @@
+# Core Data Engineering - Let Airflow handle ALL dependencies
+apache-airflow[postgres,redis,celery]==2.8.0
+apache-airflow-providers-postgres==5.7.1
+apache-airflow-providers-redis==3.4.0
+
+# Data Processing - Core packages only
+pyspark==3.5.0
+delta-spark==3.0.0
+
+# Data Transformation
+dbt-core==1.7.4
+dbt-postgres==1.7.4
+
+# Data Processing & Analytics - Only absolutely essential
+pandas==2.1.4
+numpy>=1.25.0,<2.0.0  # Required for Pandas 2.1.4
+pyarrow==14.0.2
+
+# Database Connectivity - Let Airflow handle versions
+psycopg2-binary==2.9.9
+# All other DB packages - Let Airflow handle
+
+# Streaming & Messaging
+kafka-python==2.0.2
+confluent-kafka==2.3.0
+
+# API Development
+fastapi==0.108.0
+uvicorn[standard]==0.25.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# Authentication & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.6
+
+# Monitoring & Observability - Let Airflow handle OpenTelemetry
+prometheus-client==0.19.0
+grafana-api==1.0.3
+
+# Cloud & Infrastructure
+boto3==1.34.34
+minio==7.2.0
+
+# Data Quality & Testing - Core only
+pytest==7.4.4
+pytest-asyncio==0.23.2
+pytest-mock==3.12.0
+
+# Utilities - Core only
+click==8.1.7
+python-dotenv==1.0.0
+pyyaml==6.0.1
+requests==2.31.0
+faker==22.2.0
+
+# Development - Core only
+black==23.12.1
+flake8==7.0.0
+isort==5.13.2
+
+# Jupyter & Analysis - Core only
+jupyter==1.0.0
+jupyterlab==4.0.10
+matplotlib==3.8.2
+
+# Documentation - Core only
+mkdocs==1.5.3
+mkdocs-material==9.5.3 

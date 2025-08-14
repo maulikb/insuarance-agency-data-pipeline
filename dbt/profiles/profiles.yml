@@ -1,0 +1,27 @@
+insurance_dbt:
+  outputs:
+    dev:
+      type: postgres
+      host: localhost
+      user: insurance_user
+      password: insurance_pass
+      port: 5432
+      dbname: insurance_db
+      schema: staging
+      threads: 4
+      keepalives_idle: 0
+      search_path: "staging,marts,raw_data"
+    
+    prod:
+      type: postgres
+      host: localhost
+      user: insurance_user
+      password: insurance_pass
+      port: 5432
+      dbname: insurance_db
+      schema: marts
+      threads: 4
+      keepalives_idle: 0
+      search_path: "marts,staging,raw_data"
+  
+  target: dev
