@@ -82,17 +82,25 @@ produce-test-data: ## Produce test data to Kafka
 	@python kafka/producers/test_producer.py
 
 # dbt Operations
-dbt-run: ## Run dbt models
+dbt-deps: ## Install dbt package dependencies
+	@echo "📦 Installing dbt package dependencies..."
+	@cd dbt && ../insurance-env/bin/dbt deps --profiles-dir profiles
+
+dbt-run: dbt-deps ## Run dbt models
 	@echo "🔄 Running dbt models..."
-	@cd dbt && dbt run --profiles-dir profiles
+	@cd dbt && ../insurance-env/bin/dbt run --profiles-dir profiles
 
-dbt-test: ## Run dbt tests
+dbt-test: dbt-deps ## Run dbt tests
 	@echo "🧪 Running dbt tests..."
-	@cd dbt && dbt test --profiles-dir profiles
+	@cd dbt && ../insurance-env/bin/dbt test --profiles-dir profiles
 
-dbt-docs: ## Generate and serve dbt documentation
+dbt-docs: dbt-deps ## Generate and serve dbt documentation
 	@echo "📚 Generating dbt documentation..."
-	@cd dbt && dbt docs generate --profiles-dir profiles && dbt docs serve --profiles-dir profiles
+	@cd dbt && ../insurance-env/bin/dbt docs generate --profiles-dir profiles && ../insurance-env/bin/dbt docs serve --profiles-dir profiles
+
+dbt-clean: ## Clean dbt artifacts
+	@echo "🧹 Cleaning dbt artifacts..."
+	@cd dbt && ../insurance-env/bin/dbt clean
 
 # Testing
 test: ## Run all tests
