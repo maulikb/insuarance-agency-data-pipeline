@@ -55,8 +55,8 @@ cleaned_data as (
         -- Risk assessment
         risk_score,
         case 
-            when risk_score <= {{ var('risk_score_categories.low') }} then 'Low Risk'
-            when risk_score <= {{ var('risk_score_categories.medium') }} then 'Medium Risk'
+            when risk_score <= {{ var('risk_score_categories')['low'] }} then 'Low Risk'
+            when risk_score <= {{ var('risk_score_categories')['medium'] }} then 'Medium Risk'
             else 'High Risk'
         end as risk_category,
         

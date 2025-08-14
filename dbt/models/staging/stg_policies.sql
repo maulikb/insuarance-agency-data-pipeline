@@ -26,10 +26,10 @@ cleaned_data as (
         -- Dates
         effective_date,
         expiration_date,
-        extract(day from (expiration_date - effective_date)) as policy_term_days,
+        (expiration_date::date - effective_date::date) as policy_term_days,
         case 
-            when extract(day from (expiration_date - effective_date)) <= 180 then 'Short Term (≤6 months)'
-            when extract(day from (expiration_date - effective_date)) <= 365 then 'Standard (6-12 months)'
+            when (expiration_date::date - effective_date::date) <= 180 then 'Short Term (≤6 months)'
+            when (expiration_date::date - effective_date::date) <= 365 then 'Standard (6-12 months)'
             else 'Long Term (>1 year)'
         end as policy_term_category,
         
@@ -45,15 +45,15 @@ cleaned_data as (
         end as coverage_to_premium_ratio,
         
         case 
-            when premium_amount <= {{ var('premium_tier_thresholds.basic') }} then 'Basic'
-            when premium_amount <= {{ var('premium_tier_thresholds.standard') }} then 'Standard'
+            when premium_amount <= {{ var('premium_tier_thresholds')['basic'] }} then 'Basic'
+            when premium_amount <= {{ var('premium_tier_thresholds')['standard'] }} then 'Standard'
             else 'Premium'
         end as premium_tier,
         
         -- Monthly premium calculation
         case 
-            when extract(day from (expiration_date - effective_date)) > 0 
-            then premium_amount / (extract(day from (expiration_date - effective_date)) / 30.0)
+            when (expiration_date::date - effective_date::date) > 0 
+            then premium_amount / ((expiration_date::date - effective_date::date) / 30.0)
             else premium_amount
         end as monthly_premium_estimate,
         
@@ -67,11 +67,11 @@ cleaned_data as (
         case when effective_date <= current_date and expiration_date >= current_date then true else false end as is_in_force,
         
         -- Age calculations
-        extract(day from (current_date - effective_date)) as policy_age_days,
+        (current_date - effective_date::date) as policy_age_days,
         case 
-            when extract(day from (current_date - effective_date)) <= 30 then 'New (≤30 days)'
-            when extract(day from (current_date - effective_date)) <= 365 then 'Current Year'
-            when extract(day from (current_date - effective_date)) <= 730 then 'Previous Year'
+            when (current_date - effective_date::date) <= 30 then 'New (≤30 days)'
+            when (current_date - effective_date::date) <= 365 then 'Current Year'
+            when (current_date - effective_date::date) <= 730 then 'Previous Year'
             else 'Legacy (>2 years)'
         end as policy_age_category,
         
@@ -100,7 +100,7 @@ final as (
         
         -- Business priority classification
         case 
-            when policy_status = 'active' and premium_amount > {{ var('premium_tier_thresholds.standard') }} then 'High Value Active'
+            when policy_status = 'active' and premium_amount > {{ var('premium_tier_thresholds')['standard'] }} then 'High Value Active'
             when policy_status = 'active' then 'Standard Active'
             when policy_status in ('cancelled', 'expired') then 'Inactive'
             else 'Other'

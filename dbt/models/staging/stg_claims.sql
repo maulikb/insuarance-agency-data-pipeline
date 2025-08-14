@@ -27,19 +27,19 @@ cleaned_data as (
         reported_date,
         
         -- Date-based calculations
-        extract(day from (reported_date - incident_date)) as report_delay_days,
+        (reported_date::date - incident_date::date) as report_delay_days,
         case 
-            when extract(day from (reported_date - incident_date)) = 0 then 'Same Day'
-            when extract(day from (reported_date - incident_date)) <= 7 then 'Within Week'
-            when extract(day from (reported_date - incident_date)) <= 30 then 'Within Month'
+            when (reported_date::date - incident_date::date) = 0 then 'Same Day'
+            when (reported_date::date - incident_date::date) <= 7 then 'Within Week'
+            when (reported_date::date - incident_date::date) <= 30 then 'Within Month'
             else 'Over Month'
         end as report_delay_category,
         
-        extract(day from (current_date - reported_date)) as claim_age_days,
+        (current_date - reported_date::date) as claim_age_days,
         case 
-            when extract(day from (current_date - reported_date)) <= 30 then 'Recent (≤30 days)'
-            when extract(day from (current_date - reported_date)) <= 90 then 'Current (31-90 days)'
-            when extract(day from (current_date - reported_date)) <= 180 then 'Aging (91-180 days)'
+            when (current_date - reported_date::date) <= 30 then 'Recent (≤30 days)'
+            when (current_date - reported_date::date) <= 90 then 'Current (31-90 days)'
+            when (current_date - reported_date::date) <= 180 then 'Aging (91-180 days)'
             else 'Old (>180 days)'
         end as claim_age_category,
         
